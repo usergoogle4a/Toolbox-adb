@@ -1,12 +1,22 @@
-# ADB Deck
+<p align="center">
+  <img src="https://raw.githubusercontent.com/usergoogle4a/Toolbox-adb/refs/heads/main/logo.png" alt="ADB Deck Logo" width="100%">
+</p>
+
+# ADB Deck 
 
 [🇷🇺 Русский](#-русский) | [🇬🇧 English](#-english)
 
 ---
 
-## 🇷🇺 Русский
+## 🇷🇺 Русский это вайбкод 
 
 **ADB Deck** — это нативный Android-клиент Android Debug Bridge (ADB) на Kotlin и Jetpack Compose (Material 3), позволяющий управлять другими Android-устройствами без root-прав и компьютера.
+
+### 🛡️ Безопасность и приватность
+
+* **Никаких вирусов и скрытых модулей:** полностью открытый исходный код (Open Source), который вы можете проверить и собрать самостоятельно.
+* **Минимум разрешений:** приложение **не запрашивает** опасные или лишние права — никакого доступа «поверх других окон» (Overlay), специальных возможностей (Accessibility), геолокации, контактов или SMS.
+* **Локальная работа:** вся генерация RSA-ключей и передача команд происходят напрямую между вашими устройствами по USB или локальной сети без отправки данных на сторонние серверы.
 
 ### ✨ Ключевые возможности
 
@@ -39,6 +49,12 @@
 ## 🇬🇧 English
 
 **ADB Deck** is a native Android Debug Bridge (ADB) client built with Kotlin and Jetpack Compose (Material 3). It lets you manage and debug other Android devices directly from your phone or tablet—no root or PC required.
+
+### 🛡️ Security & Privacy
+
+* **Clean & Transparent:** 100% open-source codebase with zero malware, trackers, or hidden background services.
+* **No Invasive Permissions:** The app **does not request** intrusive permissions such as "Display over other apps" (Overlay), Accessibility Services, Location, Contacts, or SMS.
+* **100% Local:** All RSA key generation and ADB traffic stay strictly between your devices over USB or your local Wi-Fi network—nothing is ever sent to external servers.
 
 ### ✨ Key Features
 
