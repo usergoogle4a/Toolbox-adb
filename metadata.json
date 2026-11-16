@@ -1,0 +1,6 @@
+{
+  "name": "ADB Deck",
+  "description": "Material You Android Debug Bridge client with TCP/IP & USB OTG connections, full ADB shell terminal, package manager, command catalog, device tools, and live theme & language customization.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
