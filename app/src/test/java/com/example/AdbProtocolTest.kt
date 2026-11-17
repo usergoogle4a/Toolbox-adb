@@ -47,4 +47,11 @@ class AdbProtocolTest {
             it.titleEn.isNotBlank() && it.titleRu.isNotBlank() && it.fullAdbSyntax.isNotBlank()
         })
     }
+
+    @Test
+    fun monkeyCommand_rendersUserParameters() {
+        val monkey = AdbCommandCatalog.all.first { it.id == "monkey_app" }
+        val rendered = monkey.renderShellCommand(mapOf("package" to "com.example.app", "events" to "250"))
+        assertEquals("monkey -p com.example.app -v 250", rendered)
+    }
 }

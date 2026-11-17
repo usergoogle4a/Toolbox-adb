@@ -22,6 +22,8 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.ContentCopy
@@ -34,6 +36,7 @@ import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material.icons.rounded.UploadFile
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -51,9 +54,12 @@ import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -64,6 +70,7 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.adb.RemoteFileEntry
@@ -71,18 +78,27 @@ import com.example.data.AdbCommandCatalog
 import com.example.data.AdbCommandCategory
 import com.example.data.AdbCommandSpec
 import com.example.i18n.LocalAppStrings
+import com.example.ui.AdbPackageInfo
 import com.example.ui.ConnectionState
 import com.example.ui.DeviceMetrics
 import com.example.ui.components.ConnectRequiredCard
 import com.example.ui.theme.JetBrainsMono
 
+private enum class ParamDialogMode {
+    RUN,
+    INSERT
+}
+
 @Composable
 fun CommandsScreen(
     connectionState: ConnectionState,
+    packages: List<AdbPackageInfo>,
     deviceMetrics: DeviceMetrics,
     currentRemotePath: String,
     remoteFiles: List<RemoteFileEntry>,
     isLoadingFiles: Boolean,
+    onEnsurePackagesLoaded: () -> Unit,
+    onEnsureFilesLoaded: () -> Unit,
     onInsertInTerminal: (String) -> Unit,
     onRunShellCommand: (String) -> Unit,
     onSpecialAction: (String) -> Unit,
@@ -127,6 +143,8 @@ fun CommandsScreen(
             if (subTab == 0) {
                 CommandCatalogPane(
                     isConnected = connectionState is ConnectionState.Connected,
+                    packages = packages,
+                    onEnsurePackagesLoaded = onEnsurePackagesLoaded,
                     onInsertInTerminal = onInsertInTerminal,
                     onRunShellCommand = onRunShellCommand,
                     onSpecialAction = onSpecialAction,
@@ -136,6 +154,9 @@ fun CommandsScreen(
                 if (connectionState !is ConnectionState.Connected) {
                     ConnectRequiredCard(onGoToConnect = onGoToConnect)
                 } else {
+                    LaunchedEffect(connectionState) {
+                        onEnsureFilesLoaded()
+                    }
                     DeviceAndFilesPane(
                         metrics = deviceMetrics,
                         currentPath = currentRemotePath,
@@ -160,6 +181,8 @@ fun CommandsScreen(
 @Composable
 private fun CommandCatalogPane(
     isConnected: Boolean,
+    packages: List<AdbPackageInfo>,
+    onEnsurePackagesLoaded: () -> Unit,
     onInsertInTerminal: (String) -> Unit,
     onRunShellCommand: (String) -> Unit,
     onSpecialAction: (String) -> Unit,
@@ -169,6 +192,7 @@ private fun CommandCatalogPane(
     val clipboard = LocalClipboardManager.current
     var query by rememberSaveable { mutableStateOf("") }
     var selectedCategory by rememberSaveable { mutableStateOf<AdbCommandCategory?>(null) }
+    var paramDialogState by remember { mutableStateOf<Pair<AdbCommandSpec, ParamDialogMode>?>(null) }
 
     val commands = remember(query, selectedCategory, strings.isRussian) {
         AdbCommandCatalog.all.filter { cmd ->
@@ -223,7 +247,7 @@ private fun CommandCatalogPane(
             contentPadding = PaddingValues(bottom = 16.dp),
             modifier = Modifier.weight(1f)
         ) {
-            items(commands, key = { it.id }) { cmd ->
+            items(commands, key = { it.id }, contentType = { "adb_cmd" }) { cmd ->
                 CommandCatalogCard(
                     cmd = cmd,
                     isConnected = isConnected,
@@ -232,11 +256,23 @@ private fun CommandCatalogPane(
                         onCopyNotice(strings.copiedNotice)
                     },
                     onInsert = {
-                        onInsertInTerminal(cmd.shellCommand ?: cmd.fullAdbSyntax)
+                        if (cmd.parameters.isNotEmpty()) {
+                            if (isConnected && cmd.parameters.any { it.isPackagePicker }) {
+                                onEnsurePackagesLoaded()
+                            }
+                            paramDialogState = cmd to ParamDialogMode.INSERT
+                        } else {
+                            onInsertInTerminal(cmd.shellCommand ?: cmd.fullAdbSyntax)
+                        }
                     },
                     onRun = {
                         if (cmd.specialAction != null) {
                             onSpecialAction(cmd.specialAction)
+                        } else if (cmd.parameters.isNotEmpty()) {
+                            if (cmd.parameters.any { it.isPackagePicker }) {
+                                onEnsurePackagesLoaded()
+                            }
+                            paramDialogState = cmd to ParamDialogMode.RUN
                         } else if (cmd.shellCommand != null) {
                             onRunShellCommand(cmd.shellCommand)
                         }
@@ -245,6 +281,142 @@ private fun CommandCatalogPane(
             }
         }
     }
+
+    paramDialogState?.let { (cmd, mode) ->
+        CommandParametersDialog(
+            cmd = cmd,
+            mode = mode,
+            packages = packages,
+            onDismiss = { paramDialogState = null },
+            onConfirm = { renderedCmd ->
+                paramDialogState = null
+                if (mode == ParamDialogMode.RUN) {
+                    onRunShellCommand(renderedCmd)
+                } else {
+                    onInsertInTerminal(renderedCmd)
+                }
+            }
+        )
+    }
+}
+
+@Composable
+private fun CommandParametersDialog(
+    cmd: AdbCommandSpec,
+    mode: ParamDialogMode,
+    packages: List<AdbPackageInfo>,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit
+) {
+    val strings = LocalAppStrings.current
+    val paramValues = remember(cmd.id) {
+        mutableStateMapOf<String, String>().apply {
+            cmd.parameters.forEach { put(it.key, "") }
+        }
+    }
+    var showError by remember { mutableStateOf(false) }
+
+    val userPackages = remember(packages) {
+        packages.filter { !it.isSystem }.take(12)
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(if (strings.isRussian) cmd.titleRu else cmd.titleEn)
+        },
+        text = {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.verticalScroll(rememberScrollState())
+            ) {
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceContainerLowest,
+                    shape = MaterialTheme.shapes.small,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = cmd.fullAdbSyntax,
+                        style = MaterialTheme.typography.bodySmall.copy(fontFamily = JetBrainsMono),
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(10.dp)
+                    )
+                }
+
+                cmd.parameters.forEach { param ->
+                    val currentVal = paramValues[param.key].orEmpty()
+                    OutlinedTextField(
+                        value = currentVal,
+                        onValueChange = { newVal ->
+                            val filtered = if (param.isNumeric) newVal.filter { it.isDigit() } else newVal
+                            paramValues[param.key] = filtered
+                            showError = false
+                        },
+                        label = { Text(if (strings.isRussian) param.labelRu else param.labelEn) },
+                        placeholder = { Text(param.exampleHint) },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = if (param.isNumeric) KeyboardType.Number else KeyboardType.Text
+                        ),
+                        textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = JetBrainsMono),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    if (param.isPackagePicker && userPackages.isNotEmpty()) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState())
+                        ) {
+                            userPackages.forEach { pkg ->
+                                AssistChip(
+                                    onClick = {
+                                        paramValues[param.key] = pkg.packageName
+                                        showError = false
+                                    },
+                                    label = {
+                                        Text(
+                                            pkg.packageName.substringAfterLast('.'),
+                                            style = MaterialTheme.typography.labelSmall.copy(fontFamily = JetBrainsMono)
+                                        )
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+
+                if (showError) {
+                    Text(
+                        text = strings.paramRequiredError,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    val allFilled = cmd.parameters.all { !paramValues[it.key].isNullOrBlank() }
+                    if (!allFilled) {
+                        showError = true
+                    } else {
+                        val rendered = cmd.renderShellCommand(paramValues) ?: return@Button
+                        onConfirm(rendered)
+                    }
+                }
+            ) {
+                Text(if (mode == ParamDialogMode.RUN) strings.runNow else strings.insertToShell)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(strings.cancel)
+            }
+        }
+    )
 }
 
 @Composable
@@ -371,12 +543,11 @@ private fun DeviceAndFilesPane(
     }
 
     LazyColumn(
-        verticalArrangement = Arrangement.spacedBy(14.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
         contentPadding = PaddingValues(bottom = 16.dp),
         modifier = Modifier.fillMaxSize()
     ) {
-        // Hardware & OS Overview
-        item {
+        item(key = "overview") {
             Card(
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
                 shape = MaterialTheme.shapes.large,
@@ -408,8 +579,7 @@ private fun DeviceAndFilesPane(
             }
         }
 
-        // Display & Animation Tweaks
-        item {
+        item(key = "tweaks") {
             Card(
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
                 shape = MaterialTheme.shapes.large,
@@ -478,8 +648,7 @@ private fun DeviceAndFilesPane(
             }
         }
 
-        // Remote File Browser (/sdcard)
-        item {
+        item(key = "files_header") {
             Card(
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
                 shape = MaterialTheme.shapes.large,
@@ -540,60 +709,64 @@ private fun DeviceAndFilesPane(
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                    } else {
-                        files.forEach { entry ->
-                            Surface(
-                                color = MaterialTheme.colorScheme.surfaceContainer,
-                                shape = MaterialTheme.shapes.medium,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable(enabled = entry.isDirectory) {
-                                        onLoadFiles(entry.fullPath)
-                                    }
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = if (entry.isDirectory) Icons.Rounded.Folder else Icons.Rounded.Description,
-                                        contentDescription = null,
-                                        tint = if (entry.isDirectory) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                    Spacer(Modifier.width(10.dp))
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            text = entry.name,
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                        if (!entry.isDirectory) {
-                                            Text(
-                                                text = formatByteSize(entry.sizeBytes),
-                                                style = MaterialTheme.typography.labelSmall.copy(fontFamily = JetBrainsMono),
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
-                                        }
-                                    }
-                                    if (!entry.isDirectory) {
-                                        IconButton(onClick = {
-                                            pendingPullPath = entry.fullPath
-                                            pullLauncher.launch(entry.name)
-                                        }) {
-                                            Icon(Icons.Rounded.Download, contentDescription = strings.pullFileBtn)
-                                        }
-                                    }
-                                    IconButton(onClick = { onDeleteFile(entry) }) {
-                                        Icon(
-                                            Icons.Rounded.DeleteOutline,
-                                            contentDescription = strings.deleteFileBtn,
-                                            tint = MaterialTheme.colorScheme.error
-                                        )
-                                    }
-                                }
-                            }
+                    }
+                }
+            }
+        }
+
+        items(
+            items = files,
+            key = { it.fullPath },
+            contentType = { "remote_file" }
+        ) { entry ->
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceContainer,
+                shape = MaterialTheme.shapes.medium,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(enabled = entry.isDirectory) {
+                        onLoadFiles(entry.fullPath)
+                    }
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
+                ) {
+                    Icon(
+                        imageVector = if (entry.isDirectory) Icons.Rounded.Folder else Icons.Rounded.Description,
+                        contentDescription = null,
+                        tint = if (entry.isDirectory) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = entry.name,
+                            style = MaterialTheme.typography.bodyMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        if (!entry.isDirectory) {
+                            Text(
+                                text = formatByteSize(entry.sizeBytes),
+                                style = MaterialTheme.typography.labelSmall.copy(fontFamily = JetBrainsMono),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
+                    }
+                    if (!entry.isDirectory) {
+                        IconButton(onClick = {
+                            pendingPullPath = entry.fullPath
+                            pullLauncher.launch(entry.name)
+                        }) {
+                            Icon(Icons.Rounded.Download, contentDescription = strings.pullFileBtn)
+                        }
+                    }
+                    IconButton(onClick = { onDeleteFile(entry) }) {
+                        Icon(
+                            Icons.Rounded.DeleteOutline,
+                            contentDescription = strings.deleteFileBtn,
+                            tint = MaterialTheme.colorScheme.error
+                        )
                     }
                 }
             }

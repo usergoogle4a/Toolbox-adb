@@ -12,6 +12,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.adb.AdbClient
 import com.example.adb.AdbDeviceBanner
 import com.example.adb.AdbKeyManager
+import com.example.adb.AdbStream
 import com.example.adb.DiscoveredAdbService
 import com.example.adb.NsdAdbDiscovery
 import com.example.adb.RemoteFileEntry
@@ -30,12 +31,15 @@ import com.example.data.SettingsDataStore
 import com.example.data.ShapeStyle
 import com.example.data.ThemeMode
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -74,6 +78,7 @@ data class AdbPackageInfo(
 )
 
 data class LogcatLine(
+    val id: Long,
     val raw: String,
     val level: Char
 )
@@ -95,6 +100,10 @@ data class DeviceMetrics(
 )
 
 class AdbViewModel(application: Application) : AndroidViewModel(application) {
+    companion object {
+        const val MAX_LOGCAT_LINES = 350
+    }
+
     private val context = application.applicationContext
     private val settingsStore = SettingsDataStore(context)
     private val database = AdbDatabase.getInstance(context)
@@ -150,8 +159,8 @@ class AdbViewModel(application: Application) : AndroidViewModel(application) {
     private val _logcatLines = MutableStateFlow<List<LogcatLine>>(emptyList())
     val logcatLines: StateFlow<List<LogcatLine>> = _logcatLines.asStateFlow()
 
-    private val _isLoadingLogcat = MutableStateFlow(false)
-    val isLoadingLogcat: StateFlow<Boolean> = _isLoadingLogcat.asStateFlow()
+    private val _isLogcatStreaming = MutableStateFlow(false)
+    val isLogcatStreaming: StateFlow<Boolean> = _isLogcatStreaming.asStateFlow()
 
     private val _screenshotBytes = MutableStateFlow<ByteArray?>(null)
     val screenshotBytes: StateFlow<ByteArray?> = _screenshotBytes.asStateFlow()
@@ -182,6 +191,9 @@ class AdbViewModel(application: Application) : AndroidViewModel(application) {
 
     private var activeClient: AdbClient? = null
     private var entryCounter = 1L
+    private var logcatCounter = 1L
+    private var logcatJob: Job? = null
+    private var logcatStream: AdbStream? = null
 
     init {
         refreshUsbDevices()
@@ -221,7 +233,7 @@ class AdbViewModel(application: Application) : AndroidViewModel(application) {
             .removePrefix("adb connect")
             .trim()
         if (cleaned.isEmpty()) {
-            _connectionState.value = ConnectionState.Error("Enter IP:Port (e.g. 192.168.1.5:5555)")
+            _connectionState.value = ConnectionState.Error("Enter IP:Port (e.g. 192.168.0.100:5555)")
             return
         }
         val (host, port) = if (cleaned.startsWith("[")) {
@@ -267,6 +279,7 @@ class AdbViewModel(application: Application) : AndroidViewModel(application) {
                     val client = AdbClient(transport, keyManager)
                     client.onDisconnected = { err ->
                         viewModelScope.launch {
+                            stopLogcatStream()
                             _connectionState.value = ConnectionState.Disconnected
                             err?.message?.let { showMessage("Disconnected: $it") }
                         }
@@ -317,6 +330,7 @@ class AdbViewModel(application: Application) : AndroidViewModel(application) {
                     val client = AdbClient(transport, keyManager)
                     client.onDisconnected = { err ->
                         viewModelScope.launch {
+                            stopLogcatStream()
                             _connectionState.value = ConnectionState.Disconnected
                             err?.message?.let { showMessage("USB Disconnected: $it") }
                         }
@@ -350,16 +364,32 @@ class AdbViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private suspend fun disconnectInternal() = withContext(Dispatchers.IO) {
-        activeClient?.disconnect()
-        activeClient = null
+    private suspend fun disconnectInternal() {
+        stopLogcatStream()
+        _packages.value = emptyList()
+        _remoteFiles.value = emptyList()
+        _logcatLines.value = emptyList()
+        withContext(Dispatchers.IO) {
+            activeClient?.disconnect()
+            activeClient = null
+        }
     }
 
     private fun refreshAfterConnect() {
-        loadPackages()
+        // Only fetch lightweight metrics immediately so budget phones never stall on connect
         refreshDeviceMetrics()
-        loadRemoteFiles("/sdcard")
-        refreshLogcat()
+    }
+
+    fun ensurePackagesLoaded() {
+        if (_packages.value.isEmpty() && !_isLoadingPackages.value && activeClient != null) {
+            loadPackages()
+        }
+    }
+
+    fun ensureFilesLoaded() {
+        if (_remoteFiles.value.isEmpty() && !_isLoadingFiles.value && activeClient != null) {
+            loadRemoteFiles(_currentRemotePath.value)
+        }
     }
 
     fun deleteSavedDevice(endpoint: String) {
@@ -401,14 +431,8 @@ class AdbViewModel(application: Application) : AndroidViewModel(application) {
                     )
                 }
             )
-            _terminalEntries.update { (it + entry).takeLast(120) }
+            _terminalEntries.update { (it + entry).takeLast(80) }
             _isRunningCommand.value = false
-        }
-    }
-
-    fun toggleCommandFavorite(cmd: String, currentFav: Boolean) {
-        viewModelScope.launch {
-            dao.setCommandFavorite(cmd, !currentFav)
         }
     }
 
@@ -420,41 +444,42 @@ class AdbViewModel(application: Application) : AndroidViewModel(application) {
         val client = activeClient ?: return
         viewModelScope.launch {
             _isLoadingPackages.value = true
-            val allRes = client.executeShell("pm list packages -f")
-            val thirdPartyRes = client.executeShell("pm list packages -3")
-            val disabledRes = client.executeShell("pm list packages -d")
+            val parsed = withContext(Dispatchers.Default) {
+                val allRes = client.executeShell("pm list packages -f")
+                val thirdPartyRes = client.executeShell("pm list packages -3")
+                val disabledRes = client.executeShell("pm list packages -d")
 
-            val thirdPartySet = thirdPartyRes.getOrDefault("")
-                .lineSequence()
-                .mapNotNull { it.trim().removePrefix("package:").takeIf { p -> p.isNotBlank() } }
-                .toHashSet()
+                val thirdPartySet = thirdPartyRes.getOrDefault("")
+                    .lineSequence()
+                    .mapNotNull { it.trim().removePrefix("package:").takeIf { p -> p.isNotBlank() } }
+                    .toHashSet()
 
-            val disabledSet = disabledRes.getOrDefault("")
-                .lineSequence()
-                .mapNotNull { it.trim().removePrefix("package:").takeIf { p -> p.isNotBlank() } }
-                .toHashSet()
+                val disabledSet = disabledRes.getOrDefault("")
+                    .lineSequence()
+                    .mapNotNull { it.trim().removePrefix("package:").takeIf { p -> p.isNotBlank() } }
+                    .toHashSet()
 
-            val parsed = allRes.getOrDefault("")
-                .lineSequence()
-                .map { it.trim() }
-                .filter { it.startsWith("package:") }
-                .mapNotNull { line ->
-                    val body = line.removePrefix("package:")
-                    val eqIdx = body.lastIndexOf('=')
-                    if (eqIdx > 0) {
-                        val path = body.substring(0, eqIdx)
-                        val pkg = body.substring(eqIdx + 1).trim()
-                        AdbPackageInfo(
-                            packageName = pkg,
-                            apkPath = path,
-                            isSystem = !thirdPartySet.contains(pkg),
-                            isDisabled = disabledSet.contains(pkg)
-                        )
-                    } else null
-                }
-                .sortedBy { it.packageName.lowercase() }
-                .toList()
-
+                allRes.getOrDefault("")
+                    .lineSequence()
+                    .map { it.trim() }
+                    .filter { it.startsWith("package:") }
+                    .mapNotNull { line ->
+                        val body = line.removePrefix("package:")
+                        val eqIdx = body.lastIndexOf('=')
+                        if (eqIdx > 0) {
+                            val path = body.substring(0, eqIdx)
+                            val pkg = body.substring(eqIdx + 1).trim()
+                            AdbPackageInfo(
+                                packageName = pkg,
+                                apkPath = path,
+                                isSystem = !thirdPartySet.contains(pkg),
+                                isDisabled = disabledSet.contains(pkg)
+                            )
+                        } else null
+                    }
+                    .sortedBy { it.packageName.lowercase() }
+                    .toList()
+            }
             _packages.value = parsed
             _isLoadingPackages.value = false
         }
@@ -542,23 +567,86 @@ class AdbViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun refreshLogcat() {
-        val client = activeClient ?: return
-        viewModelScope.launch {
-            _isLoadingLogcat.value = true
-            val res = client.executeShell("logcat -d -t 250")
-            val lines = res.getOrDefault("")
-                .lineSequence()
-                .filter { it.isNotBlank() }
-                .map { line ->
-                    val lvl = Regex("\\s([VDIWEF])\\s").find(line)?.groupValues?.getOrNull(1)?.firstOrNull() ?: 'I'
-                    LogcatLine(raw = line, level = lvl)
-                }
-                .toList()
-                .asReversed()
-            _logcatLines.value = lines
-            _isLoadingLogcat.value = false
+    fun toggleLogcatStream() {
+        if (_isLogcatStreaming.value) {
+            stopLogcatStream()
+        } else {
+            startLogcatStream()
         }
+    }
+
+    fun startLogcatStream() {
+        val client = activeClient ?: return
+        if (_isLogcatStreaming.value) return
+        stopLogcatStream()
+        _isLogcatStreaming.value = true
+
+        val pendingLock = Any()
+        val pendingLines = ArrayList<LogcatLine>(64)
+        val ringBuffer = ArrayDeque<LogcatLine>(MAX_LOGCAT_LINES + 16)
+        ringBuffer.addAll(_logcatLines.value.takeLast(MAX_LOGCAT_LINES))
+
+        logcatJob = viewModelScope.launch(Dispatchers.IO) {
+            val stream = runCatching { client.openStream("shell:logcat -v time -T 80") }.getOrNull()
+            if (stream == null) {
+                _isLogcatStreaming.value = false
+                return@launch
+            }
+            logcatStream = stream
+
+            val flusher = launch {
+                while (isActive) {
+                    delay(150)
+                    val batch: List<LogcatLine>
+                    synchronized(pendingLock) {
+                        if (pendingLines.isEmpty()) continue
+                        batch = pendingLines.toList()
+                        pendingLines.clear()
+                    }
+                    for (line in batch) {
+                        ringBuffer.addLast(line)
+                    }
+                    while (ringBuffer.size > MAX_LOGCAT_LINES) {
+                        ringBuffer.removeFirst()
+                    }
+                    _logcatLines.value = ringBuffer.toList()
+                }
+            }
+
+            val partial = StringBuilder()
+            try {
+                while (isActive) {
+                    val chunk = stream.readChunk() ?: break
+                    val text = String(chunk, Charsets.UTF_8).replace("\r\n", "\n")
+                    partial.append(text)
+                    var newlineIdx = partial.indexOf('\n')
+                    while (newlineIdx >= 0) {
+                        val rawLine = partial.substring(0, newlineIdx).trimEnd()
+                        partial.delete(0, newlineIdx + 1)
+                        if (rawLine.isNotEmpty()) {
+                            val parsed = parseLogcatLine(logcatCounter++, rawLine)
+                            synchronized(pendingLock) {
+                                pendingLines.add(parsed)
+                            }
+                        }
+                        newlineIdx = partial.indexOf('\n')
+                    }
+                }
+            } finally {
+                flusher.cancel()
+                runCatching { stream.close() }
+                logcatStream = null
+                _isLogcatStreaming.value = false
+            }
+        }
+    }
+
+    fun stopLogcatStream() {
+        logcatJob?.cancel()
+        logcatJob = null
+        runCatching { logcatStream?.close() }
+        logcatStream = null
+        _isLogcatStreaming.value = false
     }
 
     fun clearLogcat() {
@@ -568,6 +656,18 @@ class AdbViewModel(application: Application) : AndroidViewModel(application) {
             _logcatLines.value = emptyList()
             showMessage("Logcat cleared")
         }
+    }
+
+    private fun parseLogcatLine(id: Long, raw: String): LogcatLine {
+        // Fast scan without allocating Regex per line on budget CPUs
+        val slashIdx = raw.indexOf('/')
+        val lvl = if (slashIdx in 1..25) {
+            val ch = raw[slashIdx - 1]
+            if (ch == 'V' || ch == 'D' || ch == 'I' || ch == 'W' || ch == 'E' || ch == 'F') ch else 'I'
+        } else {
+            'I'
+        }
+        return LogcatLine(id = id, raw = raw, level = lvl)
     }
 
     fun sendKeyEvent(keyCode: Int) {
@@ -822,6 +922,7 @@ class AdbViewModel(application: Application) : AndroidViewModel(application) {
 
     override fun onCleared() {
         super.onCleared()
+        stopLogcatStream()
         nsdDiscovery.stopDiscovery()
         activeClient?.disconnect()
     }

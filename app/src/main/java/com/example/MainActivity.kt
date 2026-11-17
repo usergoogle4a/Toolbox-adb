@@ -190,7 +190,7 @@ private fun AdbDeckAppShell(viewModel: AdbViewModel) {
     val isLoadingPackages by viewModel.isLoadingPackages.collectAsStateWithLifecycle()
     val packageDetails by viewModel.packageDetails.collectAsStateWithLifecycle()
     val logcatLines by viewModel.logcatLines.collectAsStateWithLifecycle()
-    val isLoadingLogcat by viewModel.isLoadingLogcat.collectAsStateWithLifecycle()
+    val isLogcatStreaming by viewModel.isLogcatStreaming.collectAsStateWithLifecycle()
     val screenshotBitmap by viewModel.screenshotBitmap.collectAsStateWithLifecycle()
     val isTakingScreenshot by viewModel.isTakingScreenshot.collectAsStateWithLifecycle()
     val currentRemotePath by viewModel.currentRemotePath.collectAsStateWithLifecycle()
@@ -338,7 +338,7 @@ private fun AdbDeckAppShell(viewModel: AdbViewModel) {
                             isRunningCommand = isRunningCommand,
                             terminalFontSize = settings.terminalFontSize,
                             logcatLines = logcatLines,
-                            isLoadingLogcat = isLoadingLogcat,
+                            isLogcatStreaming = isLogcatStreaming,
                             screenshotBitmap = screenshotBitmap,
                             isTakingScreenshot = isTakingScreenshot,
                             onDraftChange = viewModel::setTerminalDraft,
@@ -347,7 +347,9 @@ private fun AdbDeckAppShell(viewModel: AdbViewModel) {
                                 viewModel.setTerminalDraft("")
                             },
                             onClearTerminal = viewModel::clearTerminal,
-                            onRefreshLogcat = viewModel::refreshLogcat,
+                            onStartLogcatStream = viewModel::startLogcatStream,
+                            onStopLogcatStream = viewModel::stopLogcatStream,
+                            onToggleLogcatStream = viewModel::toggleLogcatStream,
                             onClearLogcat = viewModel::clearLogcat,
                             onSendKeyEvent = viewModel::sendKeyEvent,
                             onSendRemoteText = viewModel::sendRemoteText,
@@ -363,6 +365,7 @@ private fun AdbDeckAppShell(viewModel: AdbViewModel) {
                             packages = packages,
                             isLoading = isLoadingPackages,
                             packageDetails = packageDetails,
+                            onEnsureLoaded = viewModel::ensurePackagesLoaded,
                             onRefresh = viewModel::loadPackages,
                             onInstallApk = viewModel::installApkFromUri,
                             onUninstall = viewModel::uninstallPackage,
@@ -378,10 +381,13 @@ private fun AdbDeckAppShell(viewModel: AdbViewModel) {
                     composable(AdbRoutes.COMMANDS) {
                         CommandsScreen(
                             connectionState = connectionState,
+                            packages = packages,
                             deviceMetrics = deviceMetrics,
                             currentRemotePath = currentRemotePath,
                             remoteFiles = remoteFiles,
                             isLoadingFiles = isLoadingFiles,
+                            onEnsurePackagesLoaded = viewModel::ensurePackagesLoaded,
+                            onEnsureFilesLoaded = viewModel::ensureFilesLoaded,
                             onInsertInTerminal = { cmd ->
                                 viewModel.setTerminalDraft(cmd)
                                 navigateTo(AdbRoutes.TERMINAL)

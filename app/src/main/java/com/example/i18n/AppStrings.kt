@@ -64,7 +64,9 @@ data class AppStrings(
     val connectRequiredTitle: String,
     val connectRequiredBody: String,
     val goToConnect: String,
-    val refreshLogs: String,
+    val startStreamLogs: String,
+    val pauseStreamLogs: String,
+    val followLatestBtn: String,
     val clearLogs: String,
     val filterLogPlaceholder: String,
     val remoteKeysTitle: String,
@@ -93,6 +95,7 @@ data class AppStrings(
     val actionEnable: String,
     val actionLaunch: String,
     val actionInspect: String,
+    val packageActionsTitle: String,
     val confirmUninstallTitle: String,
     val confirmUninstallBody: String,
     val cancel: String,
@@ -108,6 +111,8 @@ data class AppStrings(
     val insertToShell: String,
     val runNow: String,
     val copiedNotice: String,
+    val enterParamsTitle: String,
+    val paramRequiredError: String,
     val deviceOverviewTitle: String,
     val displayTweaksTitle: String,
     val resolutionLabel: String,
@@ -148,10 +153,12 @@ data class AppStrings(
 ) {
     fun categoryLabel(category: AdbCommandCategory): String = when (category) {
         AdbCommandCategory.CONNECTION -> if (isRussian) "Подключение" else "Connection"
+        AdbCommandCategory.MONKEY_STRESS -> if (isRussian) "Monkey-тест" else "Monkey Stress"
         AdbCommandCategory.PACKAGES -> if (isRussian) "Пакеты (pm)" else "Packages (pm)"
         AdbCommandCategory.SHELL_SYSTEM -> if (isRussian) "Система и Shell" else "System & Shell"
         AdbCommandCategory.ACTIVITY_MANAGER -> if (isRussian) "Активности (am)" else "Activity (am)"
         AdbCommandCategory.DISPLAY_SETTINGS -> if (isRussian) "Экран и Settings" else "Display & Settings"
+        AdbCommandCategory.NETWORK_RADIO -> if (isRussian) "Сеть и Wi-Fi" else "Network & Radio"
         AdbCommandCategory.FILES_SYNC -> if (isRussian) "Файлы (sync)" else "Files (sync)"
         AdbCommandCategory.LOGS_DUMPSYS -> if (isRussian) "Логи и Dumpsys" else "Logs & Dumpsys"
         AdbCommandCategory.INPUT_CONTROL -> if (isRussian) "Ввод и Экран" else "Input & Screen"
@@ -200,7 +207,7 @@ val EnStrings = AppStrings(
     transportUsb = "USB OTG",
     heroSubtitle = "Bridge Android devices via TCP/IP or USB OTG with full shell, package manager, sync & Material You theming.",
     tcpConnectTitle = "Connect via TCP / IP",
-    tcpHostLabel = "IP:Port (e.g. 192.168.1.5:5555)",
+    tcpHostLabel = "IP:Port (e.g. 192.168.0.100:5555)",
     tcpPortLabel = "Port",
     connectBtn = "Connect",
     savedHostsTitle = "Recent Targets",
@@ -233,7 +240,9 @@ val EnStrings = AppStrings(
     connectRequiredTitle = "No ADB Device Connected",
     connectRequiredBody = "Connect a target device via IP address or USB OTG first to run live shell, inspect packages, or browse files.",
     goToConnect = "Open Connect Hub",
-    refreshLogs = "Capture Logs",
+    startStreamLogs = "Live",
+    pauseStreamLogs = "Pause",
+    followLatestBtn = "Follow latest",
     clearLogs = "Clear Buffer",
     filterLogPlaceholder = "Filter tag or message…",
     remoteKeysTitle = "Hardware & Navigation Keys",
@@ -261,6 +270,7 @@ val EnStrings = AppStrings(
     actionEnable = "Enable",
     actionLaunch = "Launch App",
     actionInspect = "Inspect Info",
+    packageActionsTitle = "Package Actions",
     confirmUninstallTitle = "Remove Package?",
     confirmUninstallBody = "This will execute ADB package removal on the connected device for:",
     cancel = "Cancel",
@@ -275,6 +285,8 @@ val EnStrings = AppStrings(
     insertToShell = "Use in Shell",
     runNow = "Run",
     copiedNotice = "Copied to clipboard",
+    enterParamsTitle = "Command Parameters",
+    paramRequiredError = "Please fill in all parameters",
     deviceOverviewTitle = "Target Hardware & OS",
     displayTweaksTitle = "Display & Animation Tweaks",
     resolutionLabel = "Resolution (e.g. 1080x2400)",
@@ -332,7 +344,7 @@ val RuStrings = AppStrings(
     transportUsb = "USB OTG",
     heroSubtitle = "Управление устройствами Android по TCP/IP и USB OTG: полный Shell, пакеты, файлы, Logcat и Material You.",
     tcpConnectTitle = "Подключение по IP (TCP/IP)",
-    tcpHostLabel = "IP:Порт (напр. 192.168.1.5:5555)",
+    tcpHostLabel = "IP:Порт (напр. 192.168.0.100:5555)",
     tcpPortLabel = "Порт",
     connectBtn = "Подключить",
     savedHostsTitle = "Недавние устройства",
@@ -365,7 +377,9 @@ val RuStrings = AppStrings(
     connectRequiredTitle = "Нет активного подключения ADB",
     connectRequiredBody = "Сначала подключите устройство по IP или USB OTG во вкладке «Связь» для работы с терминалом, пакетами и файлами.",
     goToConnect = "Перейти к подключению",
-    refreshLogs = "Снять Logcat",
+    startStreamLogs = "Поток",
+    pauseStreamLogs = "Пауза",
+    followLatestBtn = "К последним",
     clearLogs = "Очистить буфер",
     filterLogPlaceholder = "Фильтр по тегу или тексту…",
     remoteKeysTitle = "Кнопки навигации и управления",
@@ -393,6 +407,7 @@ val RuStrings = AppStrings(
     actionEnable = "Включить",
     actionLaunch = "Запустить",
     actionInspect = "Подробнее",
+    packageActionsTitle = "Действия с пакетом",
     confirmUninstallTitle = "Удалить пакет?",
     confirmUninstallBody = "Будет выполнена команда удаления ADB на подключённом устройстве для:",
     cancel = "Отмена",
@@ -407,6 +422,8 @@ val RuStrings = AppStrings(
     insertToShell = "В терминал",
     runNow = "Запустить",
     copiedNotice = "Скопировано в буфер",
+    enterParamsTitle = "Параметры команды",
+    paramRequiredError = "Заполните все параметры",
     deviceOverviewTitle = "Система и железо устройства",
     displayTweaksTitle = "Экран и анимации",
     resolutionLabel = "Разрешение (напр. 1080x2400)",

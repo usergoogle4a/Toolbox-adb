@@ -93,7 +93,7 @@ fun ConnectScreen(
     modifier: Modifier = Modifier
 ) {
     val strings = LocalAppStrings.current
-    var endpointInput by rememberSaveable { mutableStateOf("192.168.1.5:5555") }
+    var endpointInput by rememberSaveable { mutableStateOf("") }
 
     Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
         LazyColumn(
@@ -210,7 +210,7 @@ fun ConnectScreen(
                             value = endpointInput,
                             onValueChange = { endpointInput = it },
                             label = { Text(strings.tcpHostLabel) },
-                            placeholder = { Text("192.168.1.5:5555") },
+                            placeholder = { Text("192.168.0.100:5555") },
                             singleLine = true,
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
                             textStyle = MaterialTheme.typography.bodyLarge.copy(fontFamily = JetBrainsMono),
@@ -226,8 +226,10 @@ fun ConnectScreen(
                         ) {
                             AssistChip(
                                 onClick = {
-                                    val base = endpointInput.substringBefore(':').trim().ifEmpty { "192.168.1.5" }
-                                    endpointInput = "$base:5555"
+                                    val base = endpointInput.substringBefore(':').trim()
+                                    if (base.isNotEmpty()) {
+                                        endpointInput = "$base:5555"
+                                    }
                                 },
                                 label = { Text(":5555") }
                             )

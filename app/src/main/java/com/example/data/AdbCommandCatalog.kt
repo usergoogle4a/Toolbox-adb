@@ -2,15 +2,26 @@ package com.example.data
 
 enum class AdbCommandCategory {
     CONNECTION,
+    MONKEY_STRESS,
     PACKAGES,
     SHELL_SYSTEM,
     ACTIVITY_MANAGER,
     DISPLAY_SETTINGS,
+    NETWORK_RADIO,
     FILES_SYNC,
     LOGS_DUMPSYS,
     INPUT_CONTROL,
     POWER_BOOTLOADER
 }
+
+data class CommandParam(
+    val key: String,
+    val labelEn: String,
+    val labelRu: String,
+    val exampleHint: String,
+    val isNumeric: Boolean = false,
+    val isPackagePicker: Boolean = false
+)
 
 data class AdbCommandSpec(
     val id: String,
@@ -20,9 +31,19 @@ data class AdbCommandSpec(
     val descriptionEn: String,
     val descriptionRu: String,
     val fullAdbSyntax: String,
-    val shellCommand: String?, // non-null if executable directly inside active ADB shell
-    val specialAction: String? = null // e.g., "tcpip", "reboot", "reboot_bootloader", "reboot_recovery", "screencap"
-)
+    val shellCommand: String?, // may contain {param} placeholders
+    val parameters: List<CommandParam> = emptyList(),
+    val specialAction: String? = null
+) {
+    fun renderShellCommand(values: Map<String, String>): String? {
+        val tpl = shellCommand ?: return null
+        var rendered = tpl
+        for ((k, v) in values) {
+            rendered = rendered.replace("{$k}", v.trim())
+        }
+        return rendered
+    }
+}
 
 object AdbCommandCatalog {
     val all: List<AdbCommandSpec> = listOf(
@@ -55,7 +76,7 @@ object AdbCommandCatalog {
             titleRu = "Подключиться по IP",
             descriptionEn = "Connects ADB client to target device IP address and port.",
             descriptionRu = "Подключает ADB-клиент к устройству по IP-адресу и порту.",
-            fullAdbSyntax = "adb connect 192.168.1.100:5555",
+            fullAdbSyntax = "adb connect <ip>:<port>",
             shellCommand = null
         ),
         AdbCommandSpec(
@@ -75,7 +96,7 @@ object AdbCommandCatalog {
             titleRu = "Отключить TCP/IP устройство",
             descriptionEn = "Closes an active network ADB connection.",
             descriptionRu = "Закрывает активное сетевое ADB-подключение.",
-            fullAdbSyntax = "adb disconnect 192.168.1.100:5555",
+            fullAdbSyntax = "adb disconnect <ip>:<port>",
             shellCommand = null
         ),
         AdbCommandSpec(
@@ -105,8 +126,52 @@ object AdbCommandCatalog {
             titleRu = "Проброс портов (forward / reverse)",
             descriptionEn = "Forwards local socket port to device port or reverse.",
             descriptionRu = "Пробрасывает локальный порт на порт устройства или обратно.",
-            fullAdbSyntax = "adb forward tcp:8080 tcp:8080 | adb reverse tcp:8080 tcp:8080",
+            fullAdbSyntax = "adb forward tcp:<local> tcp:<remote>",
             shellCommand = null
+        ),
+
+        // MONKEY & STRESS TESTING
+        AdbCommandSpec(
+            id = "monkey_app",
+            category = AdbCommandCategory.MONKEY_STRESS,
+            titleEn = "Monkey stress test for app",
+            titleRu = "Monkey-тест приложения (случайные нажатия)",
+            descriptionEn = "Sends pseudo-random UI taps, swipes, and key events to a package.",
+            descriptionRu = "Отправляет поток случайных нажатий, свайпов и событий в выбранное приложение.",
+            fullAdbSyntax = "adb shell monkey -p <package> -v <events>",
+            shellCommand = "monkey -p {package} -v {events}",
+            parameters = listOf(
+                CommandParam("package", "Package name", "Имя пакета", "com.android.settings", isNumeric = false, isPackagePicker = true),
+                CommandParam("events", "Number of events", "Количество событий", "500", isNumeric = true)
+            )
+        ),
+        AdbCommandSpec(
+            id = "monkey_throttle",
+            category = AdbCommandCategory.MONKEY_STRESS,
+            titleEn = "Monkey test with delay (throttle)",
+            titleRu = "Monkey-тест с задержкой между действиями",
+            descriptionEn = "Runs Monkey UI fuzzer with a fixed millisecond delay between events.",
+            descriptionRu = "Запускает Monkey с заданной паузой (мс) между случайными действиями.",
+            fullAdbSyntax = "adb shell monkey -p <package> --throttle <ms> -v <events>",
+            shellCommand = "monkey -p {package} --throttle {ms} -v {events}",
+            parameters = listOf(
+                CommandParam("package", "Package name", "Имя пакета", "com.android.settings", isNumeric = false, isPackagePicker = true),
+                CommandParam("ms", "Delay (ms)", "Задержка (мс)", "150", isNumeric = true),
+                CommandParam("events", "Number of events", "Количество событий", "200", isNumeric = true)
+            )
+        ),
+        AdbCommandSpec(
+            id = "monkey_system",
+            category = AdbCommandCategory.MONKEY_STRESS,
+            titleEn = "System-wide Monkey test",
+            titleRu = "Глобальный Monkey-тест всей системы",
+            descriptionEn = "Generates random UI events across the entire system ignoring crashes.",
+            descriptionRu = "Генерирует случайные события по всему интерфейсу системы.",
+            fullAdbSyntax = "adb shell monkey --ignore-crashes --ignore-timeouts -v <events>",
+            shellCommand = "monkey --ignore-crashes --ignore-timeouts -v {events}",
+            parameters = listOf(
+                CommandParam("events", "Number of events", "Количество событий", "300", isNumeric = true)
+            )
         ),
 
         // PACKAGES (pm)
@@ -151,24 +216,17 @@ object AdbCommandCatalog {
             shellCommand = "pm list packages -d"
         ),
         AdbCommandSpec(
-            id = "pm_install",
+            id = "pm_path",
             category = AdbCommandCategory.PACKAGES,
-            titleEn = "Install / update APK",
-            titleRu = "Установить / обновить APK",
-            descriptionEn = "Installs an APK (-r reinstall keeping data, -d allow downgrade, -g grant permissions).",
-            descriptionRu = "Устанавливает APK (-r обновить с сохранением данных, -d откат версии, -g выдать права).",
-            fullAdbSyntax = "adb install -r -g app.apk",
-            shellCommand = "pm install -r /data/local/tmp/app.apk"
-        ),
-        AdbCommandSpec(
-            id = "pm_uninstall",
-            category = AdbCommandCategory.PACKAGES,
-            titleEn = "Uninstall package",
-            titleRu = "Удалить приложение",
-            descriptionEn = "Removes a user application completely (or use --user 0 for system bloatware).",
-            descriptionRu = "Полностью удаляет приложение (или --user 0 для системных приложений без root).",
-            fullAdbSyntax = "adb uninstall com.example.app",
-            shellCommand = "pm uninstall --user 0 com.example.app"
+            titleEn = "Get APK path of package",
+            titleRu = "Путь к APK конкретного пакета",
+            descriptionEn = "Prints the filesystem path of a package's base and split APKs.",
+            descriptionRu = "Показывает точный путь к APK-файлу выбранного пакета.",
+            fullAdbSyntax = "adb shell pm path <package>",
+            shellCommand = "pm path {package}",
+            parameters = listOf(
+                CommandParam("package", "Package name", "Имя пакета", "com.android.chrome", isPackagePicker = true)
+            )
         ),
         AdbCommandSpec(
             id = "pm_clear",
@@ -177,28 +235,104 @@ object AdbCommandCatalog {
             titleRu = "Очистить данные и кэш приложения",
             descriptionEn = "Deletes all user data and cache for a package.",
             descriptionRu = "Сбрасывает все данные и кэш указанного пакета.",
-            fullAdbSyntax = "adb shell pm clear com.example.app",
-            shellCommand = "pm clear com.example.app"
+            fullAdbSyntax = "adb shell pm clear <package>",
+            shellCommand = "pm clear {package}",
+            parameters = listOf(
+                CommandParam("package", "Package name", "Имя пакета", "com.example.app", isPackagePicker = true)
+            )
+        ),
+        AdbCommandSpec(
+            id = "pm_uninstall",
+            category = AdbCommandCategory.PACKAGES,
+            titleEn = "Uninstall package (User 0)",
+            titleRu = "Удалить приложение (User 0)",
+            descriptionEn = "Removes a package for user 0 (works for system bloatware without root).",
+            descriptionRu = "Удаляет пакет для пользователя 0 (работает и для системных приложений без root).",
+            fullAdbSyntax = "adb shell pm uninstall --user 0 <package>",
+            shellCommand = "pm uninstall --user 0 {package}",
+            parameters = listOf(
+                CommandParam("package", "Package name", "Имя пакета", "com.example.app", isPackagePicker = true)
+            )
         ),
         AdbCommandSpec(
             id = "pm_disable",
             category = AdbCommandCategory.PACKAGES,
-            titleEn = "Disable / Enable package",
-            titleRu = "Отключить / Включить пакет",
-            descriptionEn = "Disables or re-enables an app for user 0 without uninstalling.",
-            descriptionRu = "Отключает или включает пакет для пользователя 0 без удаления.",
-            fullAdbSyntax = "adb shell pm disable-user --user 0 <pkg>",
-            shellCommand = "pm disable-user --user 0 com.example.app"
+            titleEn = "Disable package (freeze)",
+            titleRu = "Отключить / заморозить пакет",
+            descriptionEn = "Disables an app for user 0 without uninstalling.",
+            descriptionRu = "Отключает пакет для пользователя 0 без удаления.",
+            fullAdbSyntax = "adb shell pm disable-user --user 0 <package>",
+            shellCommand = "pm disable-user --user 0 {package}",
+            parameters = listOf(
+                CommandParam("package", "Package name", "Имя пакета", "com.example.app", isPackagePicker = true)
+            )
+        ),
+        AdbCommandSpec(
+            id = "pm_enable",
+            category = AdbCommandCategory.PACKAGES,
+            titleEn = "Enable disabled package",
+            titleRu = "Включить отключённый пакет",
+            descriptionEn = "Re-enables a previously disabled package.",
+            descriptionRu = "Снова включает ранее отключённое приложение.",
+            fullAdbSyntax = "adb shell pm enable <package>",
+            shellCommand = "pm enable {package}",
+            parameters = listOf(
+                CommandParam("package", "Package name", "Имя пакета", "com.example.app", isPackagePicker = true)
+            )
         ),
         AdbCommandSpec(
             id = "pm_grant",
             category = AdbCommandCategory.PACKAGES,
-            titleEn = "Grant / Revoke runtime permission",
-            titleRu = "Выдать / Отозвать разрешение",
-            descriptionEn = "Grants or revokes a dangerous Android permission for an app.",
-            descriptionRu = "Выдаёт или отзывает разрешение Android для указанного приложения.",
-            fullAdbSyntax = "adb shell pm grant <pkg> android.permission.CAMERA",
-            shellCommand = "pm grant com.example.app android.permission.CAMERA"
+            titleEn = "Grant runtime permission",
+            titleRu = "Выдать разрешение приложению",
+            descriptionEn = "Grants a dangerous Android permission for an app.",
+            descriptionRu = "Выдаёт указанное Android-разрешение приложению.",
+            fullAdbSyntax = "adb shell pm grant <package> <permission>",
+            shellCommand = "pm grant {package} {permission}",
+            parameters = listOf(
+                CommandParam("package", "Package name", "Имя пакета", "com.example.app", isPackagePicker = true),
+                CommandParam("permission", "Permission", "Разрешение", "android.permission.CAMERA")
+            )
+        ),
+        AdbCommandSpec(
+            id = "pm_revoke",
+            category = AdbCommandCategory.PACKAGES,
+            titleEn = "Revoke runtime permission",
+            titleRu = "Отозвать разрешение у приложения",
+            descriptionEn = "Revokes a previously granted runtime permission.",
+            descriptionRu = "Отзывает ранее выданное разрешение у пакета.",
+            fullAdbSyntax = "adb shell pm revoke <package> <permission>",
+            shellCommand = "pm revoke {package} {permission}",
+            parameters = listOf(
+                CommandParam("package", "Package name", "Имя пакета", "com.example.app", isPackagePicker = true),
+                CommandParam("permission", "Permission", "Разрешение", "android.permission.CAMERA")
+            )
+        ),
+        AdbCommandSpec(
+            id = "pm_compile_speed",
+            category = AdbCommandCategory.PACKAGES,
+            titleEn = "AOT compile app (speed)",
+            titleRu = "Скомпилировать приложение (ART speed)",
+            descriptionEn = "Forces ART ahead-of-time compilation in speed mode for smoother performance.",
+            descriptionRu = "Принудительно компилирует код пакета в профиль speed для ускорения запуска.",
+            fullAdbSyntax = "adb shell cmd package compile -m speed -f <package>",
+            shellCommand = "cmd package compile -m speed -f {package}",
+            parameters = listOf(
+                CommandParam("package", "Package name", "Имя пакета", "com.example.app", isPackagePicker = true)
+            )
+        ),
+        AdbCommandSpec(
+            id = "pm_trim_caches",
+            category = AdbCommandCategory.PACKAGES,
+            titleEn = "Trim system app caches",
+            titleRu = "Очистить кэши до заданного объёма",
+            descriptionEn = "Requests Android to free cache files up to target size in MB.",
+            descriptionRu = "Освобождает кэш приложений до указанного объёма в мегабайтах.",
+            fullAdbSyntax = "adb shell pm trim-caches <mb>M",
+            shellCommand = "pm trim-caches {mb}M",
+            parameters = listOf(
+                CommandParam("mb", "Size (MB)", "Объём (МБ)", "512", isNumeric = true)
+            )
         ),
 
         // SHELL & SYSTEM INFO
@@ -237,10 +371,13 @@ object AdbCommandCatalog {
             category = AdbCommandCategory.SHELL_SYSTEM,
             titleEn = "CPU & memory snapshot (top)",
             titleRu = "Нагрузка CPU и памяти (top)",
-            descriptionEn = "Captures one iteration of top CPU-consuming processes.",
+            descriptionEn = "Captures one snapshot of top N CPU-consuming processes.",
             descriptionRu = "Показывает снимок самых ресурсоёмких процессов по CPU и RAM.",
-            fullAdbSyntax = "adb shell top -n 1 -m 15",
-            shellCommand = "top -n 1 -m 15"
+            fullAdbSyntax = "adb shell top -n 1 -m <count>",
+            shellCommand = "top -n 1 -m {count}",
+            parameters = listOf(
+                CommandParam("count", "Process count", "Количество процессов", "15", isNumeric = true)
+            )
         ),
         AdbCommandSpec(
             id = "sys_df",
@@ -253,16 +390,6 @@ object AdbCommandCatalog {
             shellCommand = "df -h"
         ),
         AdbCommandSpec(
-            id = "sys_ip",
-            category = AdbCommandCategory.SHELL_SYSTEM,
-            titleEn = "Network interfaces & IP addresses",
-            titleRu = "Сетевые интерфейсы и IP-адреса",
-            descriptionEn = "Shows wlan0/rmnet IP addresses and routing details.",
-            descriptionRu = "Показывает IP-адреса Wi-Fi/мобильных интерфейсов.",
-            fullAdbSyntax = "adb shell ip addr show",
-            shellCommand = "ip addr show"
-        ),
-        AdbCommandSpec(
             id = "sys_free",
             category = AdbCommandCategory.SHELL_SYSTEM,
             titleEn = "RAM usage summary",
@@ -272,17 +399,53 @@ object AdbCommandCatalog {
             fullAdbSyntax = "adb shell free -h",
             shellCommand = "free -h"
         ),
+        AdbCommandSpec(
+            id = "sys_cpuinfo",
+            category = AdbCommandCategory.SHELL_SYSTEM,
+            titleEn = "Read CPU hardware info",
+            titleRu = "Информация о процессоре (/proc/cpuinfo)",
+            descriptionEn = "Displays processor cores, features, and hardware platform.",
+            descriptionRu = "Выводит данные о ядрах процессора и аппаратной платформе.",
+            fullAdbSyntax = "adb shell cat /proc/cpuinfo",
+            shellCommand = "cat /proc/cpuinfo"
+        ),
+        AdbCommandSpec(
+            id = "sys_uptime",
+            category = AdbCommandCategory.SHELL_SYSTEM,
+            titleEn = "Device uptime & load average",
+            titleRu = "Время работы и средняя нагрузка (uptime)",
+            descriptionEn = "Prints how long the device has been running since boot.",
+            descriptionRu = "Показывает время работы устройства без перезагрузки и load average.",
+            fullAdbSyntax = "adb shell uptime",
+            shellCommand = "uptime"
+        ),
 
         // ACTIVITY MANAGER (am)
         AdbCommandSpec(
-            id = "am_start",
+            id = "am_start_url",
             category = AdbCommandCategory.ACTIVITY_MANAGER,
-            titleEn = "Start activity or URL",
-            titleRu = "Запустить Activity или ссылку",
-            descriptionEn = "Launches a specific Activity or opens a URI intent.",
-            descriptionRu = "Запускает конкретный экран приложения или открывает URL-намерение.",
-            fullAdbSyntax = "adb shell am start -a android.intent.action.VIEW -d https://example.com",
-            shellCommand = "am start -a android.settings.SETTINGS"
+            titleEn = "Open URL on device",
+            titleRu = "Открыть ссылку на устройстве",
+            descriptionEn = "Launches browser or app handler for an HTTP/HTTPS URL.",
+            descriptionRu = "Открывает указанный URL в браузере или обработчике на устройстве.",
+            fullAdbSyntax = "adb shell am start -a android.intent.action.VIEW -d <url>",
+            shellCommand = "am start -a android.intent.action.VIEW -d {url}",
+            parameters = listOf(
+                CommandParam("url", "URL", "Ссылка", "https://example.com")
+            )
+        ),
+        AdbCommandSpec(
+            id = "am_start_pkg",
+            category = AdbCommandCategory.ACTIVITY_MANAGER,
+            titleEn = "Launch app by package",
+            titleRu = "Запустить приложение по имени пакета",
+            descriptionEn = "Starts the launcher activity of the specified package.",
+            descriptionRu = "Запускает главный экран указанного пакета.",
+            fullAdbSyntax = "adb shell monkey -p <package> -c android.intent.category.LAUNCHER 1",
+            shellCommand = "monkey -p {package} -c android.intent.category.LAUNCHER 1",
+            parameters = listOf(
+                CommandParam("package", "Package name", "Имя пакета", "com.android.settings", isPackagePicker = true)
+            )
         ),
         AdbCommandSpec(
             id = "am_force_stop",
@@ -291,18 +454,21 @@ object AdbCommandCatalog {
             titleRu = "Принудительно остановить приложение",
             descriptionEn = "Immediately terminates all processes of a package.",
             descriptionRu = "Мгновенно завершает все процессы указанного приложения.",
-            fullAdbSyntax = "adb shell am force-stop com.example.app",
-            shellCommand = "am force-stop com.example.app"
+            fullAdbSyntax = "adb shell am force-stop <package>",
+            shellCommand = "am force-stop {package}",
+            parameters = listOf(
+                CommandParam("package", "Package name", "Имя пакета", "com.example.app", isPackagePicker = true)
+            )
         ),
         AdbCommandSpec(
-            id = "am_broadcast",
+            id = "am_kill_all",
             category = AdbCommandCategory.ACTIVITY_MANAGER,
-            titleEn = "Send system broadcast",
-            titleRu = "Отправить Broadcast-событие",
-            descriptionEn = "Dispatches an Intent broadcast to receivers.",
-            descriptionRu = "Отправляет широковещательный Intent-сигнал.",
-            fullAdbSyntax = "adb shell am broadcast -a com.example.ACTION",
-            shellCommand = "am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE"
+            titleEn = "Kill all background processes",
+            titleRu = "Завершить все фоновые процессы (kill-all)",
+            descriptionEn = "Frees RAM by killing safe-to-stop background processes.",
+            descriptionRu = "Освобождает ОЗУ, завершая фоновые процессы.",
+            fullAdbSyntax = "adb shell am kill-all",
+            shellCommand = "am kill-all"
         ),
         AdbCommandSpec(
             id = "am_top_activity",
@@ -317,44 +483,170 @@ object AdbCommandCatalog {
 
         // DISPLAY & SETTINGS
         AdbCommandSpec(
-            id = "wm_size",
+            id = "wm_size_info",
             category = AdbCommandCategory.DISPLAY_SETTINGS,
-            titleEn = "Get or change screen resolution",
-            titleRu = "Разрешение экрана (wm size)",
-            descriptionEn = "Inspects or overrides physical screen resolution (use 'wm size reset' to restore).",
-            descriptionRu = "Показывает или меняет разрешение экрана (сброс: 'wm size reset').",
-            fullAdbSyntax = "adb shell wm size [WxH | reset]",
+            titleEn = "Check screen resolution",
+            titleRu = "Текущее разрешение экрана (wm size)",
+            descriptionEn = "Reads physical and override screen resolution.",
+            descriptionRu = "Показывает физическое и переопределённое разрешение экрана.",
+            fullAdbSyntax = "adb shell wm size",
             shellCommand = "wm size"
         ),
         AdbCommandSpec(
-            id = "wm_density",
+            id = "wm_size_set",
             category = AdbCommandCategory.DISPLAY_SETTINGS,
-            titleEn = "Get or change screen DPI",
-            titleRu = "Плотность экрана DPI (wm density)",
-            descriptionEn = "Inspects or sets custom DPI scaling (use 'wm density reset' to restore).",
-            descriptionRu = "Показывает или меняет масштаб DPI (сброс: 'wm density reset').",
-            fullAdbSyntax = "adb shell wm density [DPI | reset]",
-            shellCommand = "wm density"
+            titleEn = "Set custom screen resolution",
+            titleRu = "Изменить разрешение экрана (ШxВ)",
+            descriptionEn = "Overrides display resolution to width x height pixels.",
+            descriptionRu = "Задаёт новое разрешение экрана (ширина и высота в пикселях).",
+            fullAdbSyntax = "adb shell wm size <width>x<height>",
+            shellCommand = "wm size {width}x{height}",
+            parameters = listOf(
+                CommandParam("width", "Width (px)", "Ширина (px)", "1080", isNumeric = true),
+                CommandParam("height", "Height (px)", "Высота (px)", "2400", isNumeric = true)
+            )
         ),
         AdbCommandSpec(
-            id = "settings_anim",
+            id = "wm_size_reset",
             category = AdbCommandCategory.DISPLAY_SETTINGS,
-            titleEn = "Read animation scale settings",
-            titleRu = "Скорость системных анимаций",
-            descriptionEn = "Checks window, transition, and animator duration scales.",
-            descriptionRu = "Проверяет масштаб скорости анимаций окон и переходов.",
-            fullAdbSyntax = "adb shell settings get global animator_duration_scale",
-            shellCommand = "settings get global window_animation_scale && settings get global transition_animation_scale && settings get global animator_duration_scale"
+            titleEn = "Reset screen resolution",
+            titleRu = "Сбросить разрешение экрана",
+            descriptionEn = "Restores default physical display resolution.",
+            descriptionRu = "Возвращает стандартное разрешение экрана.",
+            fullAdbSyntax = "adb shell wm size reset",
+            shellCommand = "wm size reset"
         ),
         AdbCommandSpec(
-            id = "settings_list_system",
+            id = "wm_density_set",
             category = AdbCommandCategory.DISPLAY_SETTINGS,
-            titleEn = "Dump global & system settings",
-            titleRu = "Все системные настройки (settings list)",
+            titleEn = "Set custom screen DPI",
+            titleRu = "Изменить плотность экрана (DPI)",
+            descriptionEn = "Overrides UI scaling DPI (use 'wm density reset' to restore).",
+            descriptionRu = "Меняет масштаб интерфейса через значение DPI.",
+            fullAdbSyntax = "adb shell wm density <dpi>",
+            shellCommand = "wm density {dpi}",
+            parameters = listOf(
+                CommandParam("dpi", "DPI value", "Значение DPI", "420", isNumeric = true)
+            )
+        ),
+        AdbCommandSpec(
+            id = "wm_density_reset",
+            category = AdbCommandCategory.DISPLAY_SETTINGS,
+            titleEn = "Reset screen DPI",
+            titleRu = "Сбросить DPI экрана",
+            descriptionEn = "Restores factory display density.",
+            descriptionRu = "Возвращает заводское значение DPI.",
+            fullAdbSyntax = "adb shell wm density reset",
+            shellCommand = "wm density reset"
+        ),
+        AdbCommandSpec(
+            id = "settings_screen_timeout",
+            category = AdbCommandCategory.DISPLAY_SETTINGS,
+            titleEn = "Set screen-off timeout (ms)",
+            titleRu = "Таймаут выключения экрана (мс)",
+            descriptionEn = "Sets inactivity timeout before screen turns off (e.g. 60000 for 1 min).",
+            descriptionRu = "Задаёт время до выключения экрана в миллисекундах (60000 = 1 мин).",
+            fullAdbSyntax = "adb shell settings put system screen_off_timeout <ms>",
+            shellCommand = "settings put system screen_off_timeout {ms}",
+            parameters = listOf(
+                CommandParam("ms", "Timeout (ms)", "Таймаут (мс)", "60000", isNumeric = true)
+            )
+        ),
+        AdbCommandSpec(
+            id = "settings_list_global",
+            category = AdbCommandCategory.DISPLAY_SETTINGS,
+            titleEn = "List global settings",
+            titleRu = "Все глобальные настройки (settings list global)",
             descriptionEn = "Lists Android global configuration keys and values.",
             descriptionRu = "Выводит список глобальных ключей настроек Android.",
             fullAdbSyntax = "adb shell settings list global",
             shellCommand = "settings list global"
+        ),
+        AdbCommandSpec(
+            id = "statusbar_expand",
+            category = AdbCommandCategory.DISPLAY_SETTINGS,
+            titleEn = "Expand notifications shade",
+            titleRu = "Открыть шторку уведомлений",
+            descriptionEn = "Pulls down the system notification panel.",
+            descriptionRu = "Программно раскрывает шторку уведомлений.",
+            fullAdbSyntax = "adb shell cmd statusbar expand-notifications",
+            shellCommand = "cmd statusbar expand-notifications"
+        ),
+        AdbCommandSpec(
+            id = "statusbar_collapse",
+            category = AdbCommandCategory.DISPLAY_SETTINGS,
+            titleEn = "Collapse notifications shade",
+            titleRu = "Закрыть шторку уведомлений",
+            descriptionEn = "Closes the notification shade.",
+            descriptionRu = "Сворачивает шторку уведомлений.",
+            fullAdbSyntax = "adb shell cmd statusbar collapse",
+            shellCommand = "cmd statusbar collapse"
+        ),
+
+        // NETWORK & RADIO
+        AdbCommandSpec(
+            id = "net_ip",
+            category = AdbCommandCategory.NETWORK_RADIO,
+            titleEn = "Network interfaces & IP addresses",
+            titleRu = "Сетевые интерфейсы и IP-адреса",
+            descriptionEn = "Shows wlan0/rmnet IP addresses and routing details.",
+            descriptionRu = "Показывает IP-адреса Wi-Fi и мобильных интерфейсов.",
+            fullAdbSyntax = "adb shell ip addr show",
+            shellCommand = "ip addr show"
+        ),
+        AdbCommandSpec(
+            id = "net_wifi_on",
+            category = AdbCommandCategory.NETWORK_RADIO,
+            titleEn = "Enable Wi-Fi",
+            titleRu = "Включить Wi-Fi",
+            descriptionEn = "Turns on Wi-Fi radio on the connected device.",
+            descriptionRu = "Включает модуль Wi-Fi на подключённом устройстве.",
+            fullAdbSyntax = "adb shell svc wifi enable",
+            shellCommand = "svc wifi enable"
+        ),
+        AdbCommandSpec(
+            id = "net_wifi_off",
+            category = AdbCommandCategory.NETWORK_RADIO,
+            titleEn = "Disable Wi-Fi",
+            titleRu = "Выключить Wi-Fi",
+            descriptionEn = "Turns off Wi-Fi radio on the connected device.",
+            descriptionRu = "Отключает модуль Wi-Fi на устройстве.",
+            fullAdbSyntax = "adb shell svc wifi disable",
+            shellCommand = "svc wifi disable"
+        ),
+        AdbCommandSpec(
+            id = "net_data_on",
+            category = AdbCommandCategory.NETWORK_RADIO,
+            titleEn = "Enable Mobile Data",
+            titleRu = "Включить мобильный интернет",
+            descriptionEn = "Turns cellular mobile data on.",
+            descriptionRu = "Включает передачу мобильных данных.",
+            fullAdbSyntax = "adb shell svc data enable",
+            shellCommand = "svc data enable"
+        ),
+        AdbCommandSpec(
+            id = "net_data_off",
+            category = AdbCommandCategory.NETWORK_RADIO,
+            titleEn = "Disable Mobile Data",
+            titleRu = "Выключить мобильный интернет",
+            descriptionEn = "Turns cellular mobile data off.",
+            descriptionRu = "Отключает передачу мобильных данных.",
+            fullAdbSyntax = "adb shell svc data disable",
+            shellCommand = "svc data disable"
+        ),
+        AdbCommandSpec(
+            id = "net_ping",
+            category = AdbCommandCategory.NETWORK_RADIO,
+            titleEn = "Ping host from device",
+            titleRu = "Ping узла с устройства",
+            descriptionEn = "Sends N ICMP ping packets from target device to a host.",
+            descriptionRu = "Отправляет N ICMP-пакетов с целевого устройства к указанному хосту.",
+            fullAdbSyntax = "adb shell ping -c <count> <host>",
+            shellCommand = "ping -c {count} {host}",
+            parameters = listOf(
+                CommandParam("count", "Packet count", "Число пакетов", "4", isNumeric = true),
+                CommandParam("host", "Host / IP", "Адрес / домен", "8.8.8.8")
+            )
         ),
 
         // FILES & SYNC
@@ -373,9 +665,9 @@ object AdbCommandCatalog {
             category = AdbCommandCategory.FILES_SYNC,
             titleEn = "Push local file to device",
             titleRu = "Отправить файл на устройство (push)",
-            descriptionEn = "Copies a file from host to the target device via ADB sync.",
-            descriptionRu = "Копирует файл на устройство через протокол ADB sync (доступно во вкладке Инструменты).",
-            fullAdbSyntax = "adb push local.txt /sdcard/Download/",
+            descriptionEn = "Copies a file from host to the target device via ADB sync (available in Device & Files).",
+            descriptionRu = "Копирует файл на устройство через ADB sync (во вкладке «Устройство и Файлы»).",
+            fullAdbSyntax = "adb push <local_file> /sdcard/Download/",
             shellCommand = null
         ),
         AdbCommandSpec(
@@ -384,8 +676,8 @@ object AdbCommandCatalog {
             titleEn = "Pull file from device",
             titleRu = "Скачать файл с устройства (pull)",
             descriptionEn = "Downloads a file from the target device via ADB sync.",
-            descriptionRu = "Скачивает файл с устройства на этот телефон через ADB sync.",
-            fullAdbSyntax = "adb pull /sdcard/Download/file.txt .",
+            descriptionRu = "Скачивает файл с устройства через ADB sync.",
+            fullAdbSyntax = "adb pull /sdcard/Download/<file> .",
             shellCommand = null
         ),
 
@@ -393,12 +685,15 @@ object AdbCommandCatalog {
         AdbCommandSpec(
             id = "log_recent",
             category = AdbCommandCategory.LOGS_DUMPSYS,
-            titleEn = "Read recent Logcat (last 100 lines)",
-            titleRu = "Последние 100 строк Logcat",
-            descriptionEn = "Dumps the most recent system and app logs without blocking.",
-            descriptionRu = "Выводит последние 100 строк системного журнала Logcat.",
-            fullAdbSyntax = "adb logcat -d -t 100",
-            shellCommand = "logcat -d -t 100"
+            titleEn = "Read recent Logcat lines",
+            titleRu = "Последние N строк Logcat",
+            descriptionEn = "Dumps the most recent system and app log lines.",
+            descriptionRu = "Выводит заданное количество последних строк журнала Logcat.",
+            fullAdbSyntax = "adb logcat -d -t <lines>",
+            shellCommand = "logcat -d -t {lines}",
+            parameters = listOf(
+                CommandParam("lines", "Line count", "Количество строк", "100", isNumeric = true)
+            )
         ),
         AdbCommandSpec(
             id = "log_clear",
@@ -421,14 +716,50 @@ object AdbCommandCatalog {
             shellCommand = "dumpsys battery"
         ),
         AdbCommandSpec(
-            id = "dump_meminfo",
+            id = "dump_battery_set",
             category = AdbCommandCategory.LOGS_DUMPSYS,
-            titleEn = "System memory summary (meminfo)",
-            titleRu = "Отчёт по памяти (dumpsys meminfo)",
-            descriptionEn = "Shows RAM breakdown across processes and kernel.",
-            descriptionRu = "Детальная сводка использования памяти по процессам.",
-            fullAdbSyntax = "adb shell dumpsys meminfo",
-            shellCommand = "dumpsys meminfo | head -n 45"
+            titleEn = "Simulate battery percentage",
+            titleRu = "Имитация процента заряда батареи",
+            descriptionEn = "Temporarily overrides reported battery level (0-100) for testing.",
+            descriptionRu = "Временно задаёт фиктивный процент заряда (0–100) для тестов.",
+            fullAdbSyntax = "adb shell dumpsys battery set level <percent>",
+            shellCommand = "dumpsys battery set level {percent}",
+            parameters = listOf(
+                CommandParam("percent", "Battery % (0-100)", "Заряд % (0-100)", "15", isNumeric = true)
+            )
+        ),
+        AdbCommandSpec(
+            id = "dump_battery_reset",
+            category = AdbCommandCategory.LOGS_DUMPSYS,
+            titleEn = "Reset battery simulation",
+            titleRu = "Сбросить имитацию батареи",
+            descriptionEn = "Restores real hardware battery reporting.",
+            descriptionRu = "Возвращает отображение реального заряда батареи.",
+            fullAdbSyntax = "adb shell dumpsys battery reset",
+            shellCommand = "dumpsys battery reset"
+        ),
+        AdbCommandSpec(
+            id = "dump_cpuinfo",
+            category = AdbCommandCategory.LOGS_DUMPSYS,
+            titleEn = "CPU usage by process",
+            titleRu = "Нагрузка CPU по процессам (cpuinfo)",
+            descriptionEn = "Shows recent CPU percentage breakdown per process.",
+            descriptionRu = "Показывает процент загрузки CPU каждым процессом.",
+            fullAdbSyntax = "adb shell dumpsys cpuinfo",
+            shellCommand = "dumpsys cpuinfo"
+        ),
+        AdbCommandSpec(
+            id = "dump_gfxinfo",
+            category = AdbCommandCategory.LOGS_DUMPSYS,
+            titleEn = "UI frame stats & jank (gfxinfo)",
+            titleRu = "Кадры и лаги рендеринга (gfxinfo)",
+            descriptionEn = "Displays frame rendering timings and jank percentage for an app.",
+            descriptionRu = "Показывает статистику FPS, время кадров и лаги (jank) приложения.",
+            fullAdbSyntax = "adb shell dumpsys gfxinfo <package>",
+            shellCommand = "dumpsys gfxinfo {package}",
+            parameters = listOf(
+                CommandParam("package", "Package name", "Имя пакета", "com.example.app", isPackagePicker = true)
+            )
         ),
         AdbCommandSpec(
             id = "dump_services",
@@ -454,34 +785,48 @@ object AdbCommandCatalog {
             specialAction = "screencap"
         ),
         AdbCommandSpec(
-            id = "input_home",
+            id = "input_tap",
             category = AdbCommandCategory.INPUT_CONTROL,
-            titleEn = "Press HOME key",
-            titleRu = "Нажать кнопку Домой (HOME)",
-            descriptionEn = "Sends KEYCODE_HOME (3) to the device.",
-            descriptionRu = "Отправляет нажатие кнопки Домой (KEYCODE_HOME).",
-            fullAdbSyntax = "adb shell input keyevent 3",
-            shellCommand = "input keyevent 3"
+            titleEn = "Tap screen coordinates (X, Y)",
+            titleRu = "Нажатие по координатам (X, Y)",
+            descriptionEn = "Simulates a single touch tap at (x, y) pixels.",
+            descriptionRu = "Имитирует нажатие на экран в точке (X, Y).",
+            fullAdbSyntax = "adb shell input tap <x> <y>",
+            shellCommand = "input tap {x} {y}",
+            parameters = listOf(
+                CommandParam("x", "X coordinate", "Координата X", "540", isNumeric = true),
+                CommandParam("y", "Y coordinate", "Координата Y", "1200", isNumeric = true)
+            )
         ),
         AdbCommandSpec(
-            id = "input_back",
+            id = "input_swipe",
             category = AdbCommandCategory.INPUT_CONTROL,
-            titleEn = "Press BACK key",
-            titleRu = "Нажать кнопку Назад (BACK)",
-            descriptionEn = "Sends KEYCODE_BACK (4) to the device.",
-            descriptionRu = "Отправляет нажатие кнопки Назад (KEYCODE_BACK).",
-            fullAdbSyntax = "adb shell input keyevent 4",
-            shellCommand = "input keyevent 4"
+            titleEn = "Swipe gesture (X1,Y1 -> X2,Y2)",
+            titleRu = "Свайп по координатам",
+            descriptionEn = "Performs a touch swipe from start to end coordinates over duration ms.",
+            descriptionRu = "Выполняет свайп из начальной точки в конечную за заданное время (мс).",
+            fullAdbSyntax = "adb shell input swipe <x1> <y1> <x2> <y2> <ms>",
+            shellCommand = "input swipe {x1} {y1} {x2} {y2} {ms}",
+            parameters = listOf(
+                CommandParam("x1", "Start X", "Начало X", "540", isNumeric = true),
+                CommandParam("y1", "Start Y", "Начало Y", "1600", isNumeric = true),
+                CommandParam("x2", "End X", "Конец X", "540", isNumeric = true),
+                CommandParam("y2", "End Y", "Конец Y", "600", isNumeric = true),
+                CommandParam("ms", "Duration (ms)", "Длительность (мс)", "300", isNumeric = true)
+            )
         ),
         AdbCommandSpec(
-            id = "input_power",
+            id = "input_keyevent",
             category = AdbCommandCategory.INPUT_CONTROL,
-            titleEn = "Toggle screen / POWER key",
-            titleRu = "Кнопка питания (POWER)",
-            descriptionEn = "Wakes or locks the device screen (KEYCODE_POWER).",
-            descriptionRu = "Блокирует или пробуждает экран (KEYCODE_POWER).",
-            fullAdbSyntax = "adb shell input keyevent 26",
-            shellCommand = "input keyevent 26"
+            titleEn = "Send custom KeyEvent code",
+            titleRu = "Отправить код клавиши (keyevent)",
+            descriptionEn = "Sends any Android KeyEvent numeric code (3=Home, 4=Back, 26=Power, 82=Menu).",
+            descriptionRu = "Отправляет любой числовой код клавиши (3=Home, 4=Back, 26=Power, 66=Enter).",
+            fullAdbSyntax = "adb shell input keyevent <keycode>",
+            shellCommand = "input keyevent {keycode}",
+            parameters = listOf(
+                CommandParam("keycode", "KeyEvent code", "Код клавиши", "3", isNumeric = true)
+            )
         ),
         AdbCommandSpec(
             id = "input_text",
@@ -490,8 +835,24 @@ object AdbCommandCatalog {
             titleRu = "Ввести текст удалённо",
             descriptionEn = "Injects text into the focused input field on the target device.",
             descriptionRu = "Вводит текст в активное поле ввода на подключённом устройстве.",
-            fullAdbSyntax = "adb shell input text \"hello\"",
-            shellCommand = "input text \"hello\""
+            fullAdbSyntax = "adb shell input text \"<text>\"",
+            shellCommand = "input text \"{text}\"",
+            parameters = listOf(
+                CommandParam("text", "Text to type", "Текст для ввода", "hello")
+            )
+        ),
+        AdbCommandSpec(
+            id = "input_screenrecord",
+            category = AdbCommandCategory.INPUT_CONTROL,
+            titleEn = "Record screen video to /sdcard",
+            titleRu = "Запись видео с экрана (/sdcard/record.mp4)",
+            descriptionEn = "Records screen video for N seconds to /sdcard/record.mp4.",
+            descriptionRu = "Записывает видео с экрана длительностью N секунд в /sdcard/record.mp4.",
+            fullAdbSyntax = "adb shell screenrecord --time-limit <seconds> /sdcard/record.mp4",
+            shellCommand = "screenrecord --time-limit {seconds} /sdcard/record.mp4",
+            parameters = listOf(
+                CommandParam("seconds", "Duration (sec)", "Длительность (сек)", "10", isNumeric = true)
+            )
         ),
 
         // POWER & BOOTLOADER
